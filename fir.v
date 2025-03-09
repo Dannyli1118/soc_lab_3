@@ -626,7 +626,7 @@ module fir
     always @(*) begin 
         if (state_data_ram == waiting_ap_start) begin
             next_shift_count = 5'd0;
-        end else if (state_data_ram == waiting_data) begin
+        end else if (state_data_ram == waiting_data && next_state_data_ram == waiting_data) begin
             next_shift_count = 5'd0;
         end else if (next_state_data_ram == waiting_cal && state_data_ram == waiting_data) begin
             next_shift_count = 5'd1;
