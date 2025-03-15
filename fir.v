@@ -43,21 +43,13 @@ module fir
     input   wire                     axis_clk,
     input   wire                     axis_rst_n,
     
-    output [4:0] shift_count,
+    
+    output [31:0] data_x_length,
     output [1:0] state_engine,
-    output [11:0] aw_ctrl_addr,
-    output [11:0] ar_ctrl_addr,
-    output [31:0] tap_num,
-    output [31:0] data_length,
-    output [31:0] data_addr_used_table,
-    output [5:0] data_num,
-    output [31:0] x,
-    output [31:0] h,
-    output [31:0] y,
-    output [4:0] data_addr_counter,
-    output [1:0] state_data_ram
-    //output [4:0] shift_count
-    //output [4:0] shift_reg_data [31:0]
+    output [1:0] state_data_ram,
+    output [31:0] done_times,
+    output flag_addr_rdata
+    
 );
 
 
@@ -67,6 +59,8 @@ module fir
     reg [1:0] next_state_engine;
     
     reg start_cal, next_start_cal;
+    reg [2:0] ap_ctrl; // [pa_idle, ap_done, ap_start]
+    reg [2:0] next_ap_ctrl;
     
     reg [11:0] aw_ctrl_addr; // used in main FSM
     reg [11:0] next_aw_ctrl_addr; // judged in tap RAM
@@ -74,96 +68,98 @@ module fir
     reg [11:0] next_ar_ctrl_addr; // judged in data RAM
     
 
-    parameter engine_before_start = 2'd1;
-    parameter engine_not_idle = 2'd2;
+    parameter engine_before_start = 2'd0;
+    parameter engine_idle = 2'd1;
+    parameter engine_processing = 2'd2;
     parameter engine_done = 2'd3;
 
     always @(posedge axis_clk or negedge axis_rst_n) begin
         if (!axis_rst_n) begin
-            aw_ctrl_addr <= 12'hfff;
-            start_cal <= 1'b0;
-            ar_ctrl_addr <= 12'hfff;
+            state_engine <= engine_before_start; 
+            ap_ctrl <= 3'b100;
         end else begin
-            aw_ctrl_addr <= next_aw_ctrl_addr;
-            ar_ctrl_addr <= next_ar_ctrl_addr;
-            start_cal <= next_start_cal;
+            state_engine <= next_state_engine;
+            ap_ctrl <= next_ap_ctrl;
         end        
     end
     
     // FSM
-    always @(posedge axis_clk or negedge axis_rst_n) begin
-        if (!axis_rst_n) begin
-            state_engine <= engine_before_start; 
-        end else begin
-            state_engine <= next_state_engine;
-        end
-    end
-
-    always @(*) begin
+    always @* begin
         case (state_engine)
             engine_before_start: begin
-                if (start_cal == 1'b1) begin ///////////////// ap_start not yet be judged
-                    next_state_engine = engine_not_idle;
+                if (wdata == 32'd1 && awaddr == 12'd0 && awvalid == 1'b1) begin
+                    next_state_engine = engine_processing;
+                    next_ap_ctrl = 3'b001;
                 end else begin
-                    next_state_engine = state_engine;
+                    next_state_engine = engine_before_start;
+                    next_ap_ctrl = 3'b100;
                 end
             end
-            engine_not_idle: begin
-                next_state_engine = engine_not_idle;
+            engine_processing: begin
+                if (sm_tlast) begin 
+                    next_state_engine = engine_done;
+                    next_ap_ctrl = 3'b010;
+                end else begin
+                    next_state_engine = engine_processing;
+                    next_ap_ctrl = 3'b000;
+                end
             end
             engine_done: begin
-
+                if (araddr == 0 && rdata == 32'h0000_0002 && rready && rvalid) begin
+                    next_state_engine = engine_before_start;
+                    next_ap_ctrl = 3'b100;
+                end else begin
+                    next_state_engine = engine_done;
+                    next_ap_ctrl = 3'b110;
+                end
             end
             default: begin
-                next_state_engine = state_engine;
+                next_state_engine = engine_before_start;
+                next_ap_ctrl = 3'b100;
             end
         endcase
     end
     
-    //start_cal
-    always @(*) begin////////////////////////////////////////////////////////////////////////wrong
-        if (data_A == 12'd0 * data_num && tap_A == 12'h038) begin
-            next_start_cal = 1'b1;
-        end else begin
-            next_start_cal = 1'b0;
-        end
-    end
 /////////////////////////////////////////////////////////////////////////////
 
 
-    // deal with data_length
-    reg [31:0] data_length;
-    reg [31:0] next_data_length;
+    // deal with data_x_length
+    reg [31:0] data_x_length;
+    wire [31:0] next_data_x_length;
     wire[5:0] data_num;
     reg [5:0] next_data_num;
     
     always @(posedge axis_clk, negedge axis_rst_n) begin
         if (!axis_rst_n) begin
-            data_length <= 32'd0;
+            data_x_length <= 32'd0;
         end else begin
-            data_length <= next_data_length;
+            data_x_length <= next_data_x_length;
         end
     end
     
+    /*
     always @(*) begin
         if (state_engine == engine_before_start) begin
             if (araddr < 12'h14 && araddr >= 12'h10) begin
-                next_data_length = rdata;
+                next_data_x_length = rdata;
             end else if ((awaddr < 12'h14 && awaddr >= 12'h10)) begin
-                next_data_length = wdata;
+                next_data_x_length = wdata;
             end else begin
-                next_data_length = data_length;
+                next_data_x_length = data_x_length;
             end
-        end else if (state_engine == engine_not_idle) begin
-            if (data_length > 32'd32) begin
-                next_data_length = data_length - 32'd32;
+        end else if (state_engine == engine_processing) begin
+            if (data_x_length > 32'd32) begin
+                next_data_x_length = data_x_length - 32'd32;
             end else begin
-                next_data_length = 32'd0;
+                next_data_x_length = 32'd0;
             end
         end else begin
-            next_data_length = data_length;   
+            next_data_x_length = data_x_length;   
         end
     end
+    */
+    assign next_data_x_length = 32'd400;//////////////////////////////////////////////////////////////////////// problem
+    
     
     //deal with data_num
     
@@ -259,7 +255,7 @@ module fir
     
     // deal with addr counter-combination
     always @(*) begin
-        if (state_engine == engine_not_idle) begin
+        if (state_engine == engine_processing) begin
             if (tap_addr_counter == tap_num) begin
                 next_tap_addr_counter = 5'd0;
             end else begin
@@ -322,7 +318,11 @@ module fir
                 tap_A = araddr[6:0];
             end 
         end else begin
-            tap_A = tap_do_pointer * 12'd4;
+            if (state_data_ram != waiting_cal) begin
+                tap_A = araddr[6:0];
+            end else begin
+                tap_A = tap_do_pointer * 12'd4;
+            end
         end
     end
     
@@ -371,7 +371,7 @@ module fir
     end
     
     always @(*) begin
-         if (arready == 1'b0 && arvalid == 1'b1 && flag_addr_rdata == 1'b0) begin
+         if (arready == 1'b0 && arvalid == 1'b1 && flag_addr_rdata == 1'b0 && (state_engine == engine_before_start || state_engine == engine_done)) begin
             if (araddr >= 12'h80 && araddr < 12'hff) begin
                 next_arready = 1'b1;
                 next_read_tap_addr = araddr[6:2];
@@ -385,6 +385,7 @@ module fir
          end
     end
     
+    /*
     //deal with next_ar_ctrl_addr used in main FSM
     always @(*) begin
         if (arready == 1'b0 && arvalid == 1'b1) begin
@@ -393,6 +394,7 @@ module fir
             next_ar_ctrl_addr = ar_ctrl_addr;
         end
     end
+    */
     
     reg next_rvalid;
 
@@ -407,7 +409,7 @@ module fir
     end
     
     always @(*) begin
-        if (rready == 1'b1 && rvalid == 1'b0 && flag_addr_rdata == 1'b1) begin
+        if (rready == 1'b1 && rvalid == 1'b0 && flag_addr_rdata == 1'b1 && (state_engine == engine_before_start || state_engine == engine_done)) begin
             next_rvalid = 1'b1;
         end else begin
             next_rvalid = 1'b0;
@@ -422,11 +424,11 @@ module fir
         end
     end
     
-    // deal with
+    // deal with flag_addr_rdata
     always @(*) begin
-        if (arready == 1'b0 && arvalid == 1'b1 && flag_addr_rdata == 1'b0) begin
+        if (arvalid == 1'b1 && rready == 1'b1 && flag_addr_rdata == 1'b0 && (state_engine == engine_before_start || state_engine == engine_done)) begin
             next_flag_addr_rdata = 1'b1;
-        end else if(rready == 1'b1 && rvalid == 1'b0 && flag_addr_rdata == 1'b1) begin
+        end else if(arvalid == 1'b0 && rready == 1'b1&& flag_addr_rdata == 1'b1 && (state_engine == engine_before_start || state_engine == engine_done)) begin
             next_flag_addr_rdata = 1'b0;
         end else begin
             next_flag_addr_rdata = flag_addr_rdata;
@@ -467,7 +469,7 @@ module fir
     always @(*) begin
         case(state_data_ram)
             waiting_ap_start: begin
-                if (state_engine == engine_not_idle) begin
+                if (state_engine == engine_processing) begin
                     next_state_data_ram = waiting_data;
                 end else begin
                     next_state_data_ram = state_data_ram;
@@ -481,7 +483,7 @@ module fir
                 end
             end
             waiting_cal: begin
-                if (sm_tvalid == 1'b1 && sm_tready) begin
+                if (sm_tvalid == 1'b1 && sm_tready == 1'b1) begin
                     next_state_data_ram = waiting_data;
                 end else begin
                     next_state_data_ram = waiting_cal;
@@ -515,7 +517,7 @@ module fir
     
     // deal with data_EN and data_WE and data_Di
     always @(*) begin
-        if (state_engine == engine_not_idle) begin
+        if (state_engine == engine_processing) begin
             data_EN = 1'b1;
         end else begin
             data_EN = ss_tvalid;
@@ -585,7 +587,7 @@ module fir
     reg [4:0] shift_count; // when count to shift_size => return to 0    
     reg [4:0] next_shift_count;
     
-    reg [31:0] done_times;
+    reg [31:0] done_times; //how many times the convolution has been done
     wire [31:0] next_done_times;
     
     assign output_num = tap_num + data_num - 8'd2;
@@ -594,7 +596,7 @@ module fir
     // deal with shift register
     
     always @(posedge axis_clk, negedge axis_rst_n) begin
-        if (next_state_data_ram == waiting_cal && state_data_ram == waiting_data) begin
+        if (next_state_data_ram == waiting_cal && state_data_ram == waiting_data) begin ////wrong
             for (i = 31; i > 0; i = i - 1) begin
                 shift_reg_data[i] <= shift_reg_data[i-1];
             end
@@ -648,7 +650,7 @@ module fir
     // assign data_do_pointer value
     assign data_do_pointer = shift_reg_data[shift_count];
     
-    //ssign tap_do_pointer = shift_reg_data[shift_count];
+    //assign tap_do_pointer = shift_reg_data[shift_count];
     assign tap_do_pointer = shift_count;
     
     
@@ -702,7 +704,7 @@ module fir
     // deal with x_tmp // wrong
     always @(*) begin
         //if (shift_count <= counter_reset_time + 1'b1) begin
-        if (data_Do[0] == 1'b1 || data_Do[0] == 1'b0) begin
+        if ((data_Do[0] == 1'b1 || data_Do[0] == 1'b0)) begin
             x_tmp = data_Do;
         end  else begin
             x_tmp = 32'd0;
@@ -733,11 +735,18 @@ module fir
     end
     
     assign sm_tdata = y;
-        
+    
 /////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////// output sm_tlast
 
+    always @(*) begin
+        if (done_times == data_x_length) begin
+            sm_tlast = 1'b1;
+        end else begin
+            sm_tlast = 1'b0;
+        end
+    end
 
 endmodule
 
