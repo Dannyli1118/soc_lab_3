@@ -58,19 +58,71 @@ module fir
     reg [2:0] state_engine;
     reg [2:0] next_state_engine;
     
-    reg flag_state_initial_to_before_start; // if it's 1, state to before start
-    reg next_flag_state_initial_to_before_start;
     reg flag_addr_or_tap; // to judge now is waiting tap or addr, 0 is waiting addr, 1 is waiting tag
     reg next_flag_addr_or_tap;
     reg flag_addr_or_rdata;//0 is waiting data
     reg next_flag_addr_or_rdata;
     
-    reg start_cal, next_start_cal;
     reg [2:0] ap_ctrl; // [ap_idle, ap_done, ap_start]
     reg [2:0] next_ap_ctrl;
+
+    //when initial, put 0 to data_ram, and here is used to calculate data_A
+    reg [11:0] initial_counter;
+    wire [11:0] next_initial_counter;
     
-    reg [11:0] ar_ctrl_addr; // used in main FSM
-    reg [11:0] next_ar_ctrl_addr; // judged in data RAM
+    // deal with data_x_length
+    reg [31:0] data_x_length;
+    wire [31:0] next_data_x_length;
+    reg flag_data_length_receive; // if it's 1 => data_x_length can be received => to hold 1 if there is space between awvalid and wvalid
+    reg next_flag_data_length_receive;
+    
+    reg [31:0] tap_num;
+    wire [31:0] next_tap_num;
+    reg flag_tap_num_receive; // if it's 1 => tap_num can be received => to hold 1 if there is space between awvalid and wvalid
+    reg next_flag_tap_num_receive;
+    
+    reg [4:0] tap_addr_counter;
+    reg [4:0] next_tap_addr_counter;
+    wire next_awready;
+    wire next_wready;
+    wire next_arready;
+    wire next_rvalid;
+    wire [31:0] next_rdata;
+    reg [11:0] temporary_addr;
+    reg [11:0] next_temporary_addr;
+
+    wire [4:0] data_do_pointer; // to count which data_A should be read
+    wire [4:0] tap_do_pointer; // to count which tap_A should be read
+    
+    reg [31:0] done_times; //how many times the convolution has been done
+    reg [31:0] next_done_times;
+    
+    reg [4:0] data_ram_start_place_count; // to record the start place of data_ram   
+    reg [4:0] next_data_ram_start_place_count;
+    
+    reg [4:0] tap_cursor_count; // to record the current addr to send to tap_RAM 
+    reg [4:0] next_tap_cursor_count;
+    
+    reg [4:0] data_cursor_count; // to record the current addr to send ap_ctrl data_RAM
+    reg [4:0] next_data_cursor_count;
+    
+    reg [31:0] cycle_count; // need to record how many cycle in state=engine_processing
+    reg [31:0] next_cycle_count;
+    
+    wire next_ss_tready;
+    
+    reg [4:0] data_addr_counter;
+    reg [4:0] next_data_addr_counter;
+    
+    wire [(pDATA_WIDTH-1):0] m_tmp;
+    wire [(pDATA_WIDTH-1):0] h_tmp;
+    wire [(pDATA_WIDTH-1):0] x_tmp;
+    reg [(pDATA_WIDTH-1):0] y_tmp;
+
+    reg [(pDATA_WIDTH-1):0] m;
+    reg [(pDATA_WIDTH-1):0] y;
+    reg [(pDATA_WIDTH-1):0] h;
+    reg [(pDATA_WIDTH-1):0] x;
     
     parameter engine_initial = 3'd0;
     parameter engine_before_start = 3'd1;
@@ -185,9 +237,6 @@ module fir
 
 /////////////////////////////////////////////////////////////////////////////
 //when initial, put 0 to data_ram, and here is used to calculate data_A
-    reg [11:0] initial_counter;
-    wire [11:0] next_initial_counter;
-    
     always @(posedge axis_clk, negedge axis_rst_n) begin
         if (!axis_rst_n) begin
             initial_counter <= 12'd0;
@@ -224,13 +273,6 @@ module fir
 /////////////////////////////////////////////////////////////////////////////
 
     // deal with data_x_length
-    reg [31:0] data_x_length;
-    wire [31:0] next_data_x_length;
-    reg flag_data_length_receive; // if it's 1 => data_x_length can be received => to hold 1 if there is space between awvalid and wvalid
-    reg next_flag_data_length_receive;
-    wire[5:0] data_num;
-    reg [5:0] next_data_num;
-    
     always @(posedge axis_clk, negedge axis_rst_n) begin
         if (!axis_rst_n) begin
             data_x_length <= 32'd0;
@@ -253,17 +295,7 @@ module fir
     
     assign next_data_x_length = (wvalid && wready && flag_data_length_receive && state_engine == engine_before_start) ? wdata : data_x_length;
     
-    
-    //deal with data_num
-    assign data_num = 6'd32;//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    
-    
     // deal with tap_num
-    reg [31:0] tap_num;
-    wire [31:0] next_tap_num;
-    reg flag_tap_num_receive; // if it's 1 => tap_num can be received => to hold 1 if there is space between awvalid and wvalid
-    reg next_flag_tap_num_receive;
-    
     always @(posedge axis_clk, negedge axis_rst_n) begin
         if (!axis_rst_n) begin
             tap_num <= 32'd0;
@@ -289,20 +321,7 @@ module fir
 
 // tap RAM
 /////////////////////////////////////////////////////////////////////////////////////// deal with tap_RAM axi-lite
-    reg [4:0] tap_addr_counter;
-    reg [4:0] next_tap_addr_counter;
-    wire next_awready;
-    wire next_wready;
-    wire next_arready;
-    wire next_rvalid;
-    wire [31:0] next_rdata;
-    reg [11:0] temporary_addr;
-    reg [11:0] next_temporary_addr;
     
-    reg [11:0] next_tap_A;
-    
-    reg flag_one_cycle; // I want to delay one cycle when receive tap_ram or read tap_ram;
-    wire next_flag_one_cycle;
     
     always @(posedge axis_clk, negedge axis_rst_n) begin
         if (!axis_rst_n) begin
@@ -319,7 +338,7 @@ module fir
             
             //rdata <= 32'd0;
             temporary_addr <= 12'd0;
-            flag_one_cycle <= 1'b0;
+            //flag_one_cycle <= 1'b0;
             //tap_A <= 12'd0;
             //read_tap_addr <= 5'd0;
         end else begin
@@ -336,7 +355,7 @@ module fir
             
             //rdata <= next_rdata;
             temporary_addr <= next_temporary_addr;
-            flag_one_cycle <= next_flag_one_cycle;
+            //flag_one_cycle <= next_flag_one_cycle;
             //tap_A <= next_tap_A;
             //read_tap_addr <= next_read_tap_addr;
         end
@@ -358,7 +377,7 @@ module fir
       
 
     // deal with ''awready'', ''wready'' , ''arready'', ''rvalid'' 
-    assign next_flag_one_cycle = awvalid || arvalid;
+    //assign next_flag_one_cycle = awvalid || arvalid;
     assign next_awready = (awvalid == 1'b1 && state_engine == engine_before_start && awready == 1'b0 && flag_addr_or_tap == 1'b0);
     assign next_wready = (wvalid == 1'b1 && state_engine == engine_before_start && wready == 1'b0 && flag_addr_or_tap == 1'b1);
     assign next_rvalid = (arvalid == 1'b0 && rready == 1'b1 && rvalid == 1'b0 && flag_addr_or_rdata == 1'b1);
@@ -437,14 +456,7 @@ module fir
 
 // data RAM
 //////////////////////////////////////////////////////////////////////////////////////////// deal with data_RAM axi-stream
-    wire next_ss_tready;
     
-    reg [4:0] data_addr_counter;
-    reg [4:0] next_data_addr_counter;
-    reg [11:0] next_data_A;
-    
-    reg [31:0] data_addr_used_table;
-    reg [31:0] next_data_addr_used_table;
     
     //////////////////////// waiting data
     // deal with ss_tready
@@ -452,11 +464,9 @@ module fir
     always @(posedge axis_clk or negedge axis_rst_n) begin
         if (!axis_rst_n) begin
             ss_tready <= 1'b0;
-            data_addr_used_table <= 32'd0;
             data_addr_counter <= 5'd0;
         end else begin
             ss_tready <= next_ss_tready;
-            data_addr_used_table <= next_data_addr_used_table;
             data_addr_counter <= next_data_addr_counter;
         end
     end
@@ -486,7 +496,7 @@ module fir
     
     always @(*) begin
         if (ss_tready == 1'b1 && ss_tvalid == 1'b1) begin
-            if (data_addr_counter == data_num - 1'd1) begin
+            if (data_addr_counter == 5'd31) begin
                 next_data_addr_counter = 1'b0;
             end else begin
                 next_data_addr_counter = data_addr_counter + 5'd1;
@@ -511,25 +521,7 @@ module fir
 
 
 /////////////////////////////////////////////////////////// control data_do and tap_do and sm value
-    wire [7:0] output_num;
     
-    wire [4:0] data_do_pointer; // to count which data_A should be read
-    wire [4:0] tap_do_pointer; // to count which tap_A should be read
-    
-    reg [31:0] done_times; //how many times the convolution has been done
-    reg [31:0] next_done_times;
-    
-    reg [4:0] data_ram_start_place_count; // to record the start place of data_ram   
-    reg [4:0] next_data_ram_start_place_count;
-    
-    reg [4:0] tap_cursor_count; // to record the current addr to send to tap_RAM 
-    reg [4:0] next_tap_cursor_count;
-    
-    reg [4:0] data_cursor_count; // to record the current addr to send ap_ctrl data_RAM
-    reg [4:0] next_data_cursor_count;
-    
-    reg [31:0] cycle_count; // need to record how many cycle in state=engine_processing
-    reg [31:0] next_cycle_count;
     
     always @(posedge axis_clk, negedge axis_rst_n) begin
         if (!axis_rst_n) begin
@@ -662,15 +654,7 @@ module fir
 /////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////// core caculation
-    wire [(pDATA_WIDTH-1):0] m_tmp;
-    wire [(pDATA_WIDTH-1):0] h_tmp;
-    wire [(pDATA_WIDTH-1):0] x_tmp;
-    reg [(pDATA_WIDTH-1):0] y_tmp;
-
-    reg [(pDATA_WIDTH-1):0] m;
-    reg [(pDATA_WIDTH-1):0] y;
-    reg [(pDATA_WIDTH-1):0] h;
-    reg [(pDATA_WIDTH-1):0] x;
+    
 
     assign m_tmp = h * x;       
     assign h_tmp = tap_Do;
