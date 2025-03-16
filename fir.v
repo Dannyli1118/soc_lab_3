@@ -51,7 +51,8 @@ module fir
     output [4:0] tap_cursor_count,
     output [4:0] data_ram_start_place_count,
     output [4:0] data_cursor_count,
-    output flag_addr_or_rdata
+    output flag_addr_or_rdata,
+    output [5:0] cycle_count
 );
 
 
@@ -92,6 +93,8 @@ module fir
     wire [31:0] next_rdata;
     reg [11:0] temporary_addr;
     reg [11:0] next_temporary_addr;
+    
+    reg next_sm_tvalid;
 
     wire [4:0] data_do_pointer; // to count which data_A should be read
     wire [4:0] tap_do_pointer; // to count which tap_A should be read
@@ -108,8 +111,8 @@ module fir
     reg [4:0] data_cursor_count; // to record the current addr to send ap_ctrl data_RAM
     reg [4:0] next_data_cursor_count;
     
-    reg [31:0] cycle_count; // need to record how many cycle in state=engine_processing
-    reg [31:0] next_cycle_count;
+    reg [5:0] cycle_count; // need to record how many cycle in state=engine_processing
+    reg [5:0] next_cycle_count;
     
     wire next_ss_tready;
     
@@ -463,9 +466,11 @@ module fir
     always @(posedge axis_clk or negedge axis_rst_n) begin
         if (!axis_rst_n) begin
             ss_tready <= 1'b0;
+            sm_tvalid <= 1'b0;
             data_addr_counter <= 5'd0;
         end else begin
             ss_tready <= next_ss_tready;
+            sm_tvalid <= next_sm_tvalid;
             data_addr_counter <= next_data_addr_counter;
         end
     end
@@ -529,7 +534,7 @@ module fir
             data_cursor_count <= 5'd0;
             tap_cursor_count <= 5'd0;
             done_times <= 32'd0;
-            cycle_count <= 5'd0;
+            cycle_count <= 6'd0;
             data_ram_start_place_count <= 5'd0;
             //counter_every_thirty_five_cycles <= 6'd0;
         end else begin
@@ -641,16 +646,20 @@ module fir
     
     always @(*) begin
         if (tap_num == 32'd32) begin
-            if (cycle_count >= 6'd31 && next_state_engine == engine_processing) begin
-                sm_tvalid = 1'b1;
+            if (cycle_count == 6'd33) begin
+                next_sm_tvalid = 1'b1;
+            end else if (sm_tvalid && sm_tready) begin
+                next_sm_tvalid = 1'b0;
             end else begin
-                sm_tvalid = 1'b0;
+                next_sm_tvalid = sm_tvalid;
             end
         end else begin
-            if (cycle_count == tap_num[5:0] + 6'd2) begin
-                sm_tvalid = 1'b1;
+            if (cycle_count == tap_num[5:0] + 6'd1) begin
+                next_sm_tvalid = 1'b1;
+            end else if (sm_tvalid && sm_tready) begin
+                next_sm_tvalid = 1'b0;
             end else begin
-                sm_tvalid = 1'b0;
+                next_sm_tvalid = sm_tvalid;
             end
         end
     end
