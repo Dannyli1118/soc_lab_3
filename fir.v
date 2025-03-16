@@ -143,7 +143,7 @@ module fir
                 end
             end
             engine_before_start: begin
-                if (wdata == 32'd1 && awaddr == 12'd0 && awvalid == 1'b1) begin
+                if (wdata == 32'd1 && awaddr == 12'd0 && wvalid == 1'b1) begin
                     next_state_engine = engine_waiting_data;
                 end else begin
                     next_state_engine = state_engine;
@@ -168,8 +168,8 @@ module fir
                 end
             end
             engine_done: begin/////////////////////////////////////////////////////////////////////////////////////
-                if (rvalid && rready) begin
-                    next_state_engine = engine_before_start;
+                if (rvalid && rready && rdata == 32'd2) begin
+                    next_state_engine = engine_initial;
                 end else begin
                     next_state_engine = state_engine;
                 end
@@ -237,7 +237,7 @@ module fir
         end
     end
     
-    assign next_initial_counter = (state_engine == engine_initial && initial_counter != 12'd32) ? initial_counter + 12'd1 : initial_counter;
+    assign next_initial_counter = (state_engine == engine_initial && initial_counter != 12'd32) ? initial_counter + 12'd1 : 12'd0;
 /////////////////////////////////////////////////////////////////////////////
 
 /////////////////////////////////////////////////////////////////////////////
@@ -254,9 +254,9 @@ module fir
     
     // deal with flag_addr_or_rdata
     always @(*) begin
-        if (arvalid == 1'b1 && rready == 1'b1 && flag_addr_or_rdata == 1'b0) begin
+        if (arvalid == 1'b1 && arready == 1'b1 && flag_addr_or_rdata == 1'b0) begin
             next_flag_addr_or_rdata = 1'b1;
-        end else if(arvalid == 1'b0 && rready == 1'b1&& flag_addr_or_rdata == 1'b1) begin
+        end else if(rvalid == 1'b0 && rready == 1'b1&& flag_addr_or_rdata == 1'b1) begin
             next_flag_addr_or_rdata = 1'b0;
         end else begin
             next_flag_addr_or_rdata = flag_addr_or_rdata;
@@ -404,10 +404,13 @@ module fir
     
     // deal with ''tap_A''
     always @(*) begin
+    /*
         if (state_engine == engine_initial) begin
             tap_A = initial_counter * 12'd4;
         end
-        else if (state_engine == engine_before_start) begin
+        else
+        */
+        if (state_engine == engine_before_start) begin
             tap_A[6:0] = temporary_addr[6:0];
             tap_A[11:7] = 5'd0;
         end else if (state_engine == engine_processing) begin
@@ -628,7 +631,7 @@ module fir
     
     always @(*) begin
         if (tap_num == 32'd32) begin
-            if (cycle_count >= 6'd31) begin
+            if (cycle_count >= 6'd31 && next_state_engine == engine_processing) begin
                 sm_tvalid = 1'b1;
             end else begin
                 sm_tvalid = 1'b0;
