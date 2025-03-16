@@ -41,7 +41,17 @@ module fir
     input   wire [(pDATA_WIDTH-1):0] data_Do,
 
     input   wire                     axis_clk,
-    input   wire                     axis_rst_n
+    input   wire                     axis_rst_n,
+    
+    
+    output [31:0] data_x_length,
+    output [2:0] state_engine,
+    output [31:0] done_times,
+    output [11:0] temporary_addr,
+    output [4:0] tap_cursor_count,
+    output [4:0] data_ram_start_place_count,
+    output [4:0] data_cursor_count,
+    output flag_addr_or_rdata
 );
 
 
@@ -73,12 +83,12 @@ module fir
     reg flag_tap_num_receive; // if it's 1 => tap_num can be received => to hold 1 if there is space between awvalid and wvalid
     reg next_flag_tap_num_receive;
     
-    reg [4:0] tap_addr_counter;
-    reg [4:0] next_tap_addr_counter;
-    wire next_awready;
-    wire next_wready;
+//    reg [4:0] tap_addr_counter;
+//   reg [4:0] next_tap_addr_counter;
+    reg next_awready;
+    reg next_wready;
     wire next_arready;
-    wire next_rvalid;
+    reg next_rvalid;
     wire [31:0] next_rdata;
     reg [11:0] temporary_addr;
     reg [11:0] next_temporary_addr;
@@ -108,7 +118,7 @@ module fir
     
     wire [(pDATA_WIDTH-1):0] m_tmp;
     wire [(pDATA_WIDTH-1):0] h_tmp;
-    wire [(pDATA_WIDTH-1):0] x_tmp;
+    reg [(pDATA_WIDTH-1):0] x_tmp;
     reg [(pDATA_WIDTH-1):0] y_tmp;
 
     reg [(pDATA_WIDTH-1):0] m;
@@ -143,7 +153,7 @@ module fir
                 end
             end
             engine_before_start: begin
-                if (wdata == 32'd1 && awaddr == 12'd0 && wvalid == 1'b1) begin
+                if (wdata == 32'd1 && awaddr == 12'd0 && wvalid == 1'b1 && wready == 1'b1) begin
                     next_state_engine = engine_waiting_data;
                 end else begin
                     next_state_engine = state_engine;
@@ -254,9 +264,9 @@ module fir
     
     // deal with flag_addr_or_rdata
     always @(*) begin
-        if (arvalid == 1'b1 && arready == 1'b1 && flag_addr_or_rdata == 1'b0) begin
+        if (arvalid == 1'b1 && arready == 1'b1) begin
             next_flag_addr_or_rdata = 1'b1;
-        end else if(rvalid == 1'b0 && rready == 1'b1&& flag_addr_or_rdata == 1'b1) begin
+        end else if(rvalid == 1'b1 && rready == 1'b1) begin
             next_flag_addr_or_rdata = 1'b0;
         end else begin
             next_flag_addr_or_rdata = flag_addr_or_rdata;
@@ -276,7 +286,10 @@ module fir
     end
     
     always @(*) begin
-        if (awaddr == 12'h10 && awvalid == 1'b1 && awready == 1'b1 && flag_addr_or_tap == 1'b0 && state_engine == engine_before_start) begin
+        if (state_engine == engine_initial) begin
+            next_flag_data_length_receive = 1'b0;
+        end
+        else if (awaddr == 12'h10 && awvalid == 1'b1 && awready == 1'b1 && flag_addr_or_tap == 1'b0 && state_engine == engine_before_start) begin
             next_flag_data_length_receive = 1'b1;
         end else if (wvalid && wready && flag_addr_or_tap == 1'b1) begin
             next_flag_data_length_receive = 1'b0;
@@ -299,7 +312,10 @@ module fir
     end
     
     always @(*) begin
-        if (awaddr == 12'h14 && awvalid == 1'b1 && awready == 1'b1 && flag_addr_or_tap == 1'b0 && state_engine == engine_before_start) begin
+        if (state_engine == engine_initial) begin
+            next_flag_tap_num_receive = 1'b0;
+        end
+        else if (awaddr == 12'h14 && awvalid == 1'b1 && awready == 1'b1 && flag_addr_or_tap == 1'b0 && state_engine == engine_before_start) begin
             next_flag_tap_num_receive = 1'b1;
         end else if (wvalid && wready && flag_addr_or_tap == 1'b1) begin
             next_flag_tap_num_receive = 1'b0;
@@ -319,60 +335,56 @@ module fir
         if (!axis_rst_n) begin
             flag_addr_or_tap <= 1'b0;
             flag_addr_or_rdata <= 1'b0;
-            
-            tap_addr_counter <= 5'd0;
-            
+
             awready <= 1'b0;
             wready <= 1'b0;
             arready <= 1'b0;
             rvalid <= 1'b0;
-            
-            
-            //rdata <= 32'd0;
+
             temporary_addr <= 12'd0;
-            //flag_one_cycle <= 1'b0;
-            //tap_A <= 12'd0;
-            //read_tap_addr <= 5'd0;
+
         end else begin
             flag_addr_or_tap <= next_flag_addr_or_tap;
             flag_addr_or_rdata <= next_flag_addr_or_rdata;
-            
-            tap_addr_counter <= next_tap_addr_counter; 
-            
+
             awready <= next_awready;
             wready <= next_wready;
             arready <= next_arready;
             rvalid <= next_rvalid;
             
-            
-            //rdata <= next_rdata;
             temporary_addr <= next_temporary_addr;
-            //flag_one_cycle <= next_flag_one_cycle;
-            //tap_A <= next_tap_A;
-            //read_tap_addr <= next_read_tap_addr;
+
         end
     end 
-    
-    
-    // deal with addr counter-combination
-    always @(*) begin
-        if (state_engine == engine_processing) begin
-            if (tap_addr_counter == tap_num) begin
-                next_tap_addr_counter = 5'd0;
-            end else begin
-                next_tap_addr_counter = tap_addr_counter + 5'd1;
-            end  
-        end else begin
-            next_tap_addr_counter = tap_addr_counter;
-        end
-    end
-      
 
     // deal with ''awready'', ''wready'' , ''arready'', ''rvalid'' 
     //assign next_flag_one_cycle = awvalid || arvalid;
-    assign next_awready = (awvalid == 1'b1 && state_engine == engine_before_start && awready == 1'b0 && flag_addr_or_tap == 1'b0);
-    assign next_wready = (wvalid == 1'b1 && state_engine == engine_before_start && wready == 1'b0 && flag_addr_or_tap == 1'b1);
-    assign next_rvalid = (arvalid == 1'b0 && rready == 1'b1 && rvalid == 1'b0 && flag_addr_or_rdata == 1'b1);
+    always @(*) begin
+        if (awvalid == 1'b1 && (state_engine == engine_before_start || state_engine == engine_processing || state_engine == engine_waiting_data || state_engine == engine_done) && awready == 1'b0 && flag_addr_or_tap == 1'b0) begin
+            next_awready = 1'b1;
+        end else begin
+            next_awready = 1'b0;
+        end
+    end
+    always @(*) begin
+        if (wvalid == 1'b1 && (state_engine == engine_before_start || state_engine == engine_processing || state_engine == engine_waiting_data || state_engine == engine_done) && wready == 1'b0 && flag_addr_or_tap == 1'b1) begin
+            next_wready = 1'b1;
+        end else begin
+            next_wready = 1'b0;
+        end
+    end
+    always @(*) begin
+        if (rvalid == 1'b0 && flag_addr_or_rdata == 1'b1) begin
+            next_rvalid = 1'b1;
+        end else if (rvalid == 1'b1 && rready == 1'b1) begin
+            next_rvalid = 1'b0;
+        end else begin
+            next_rvalid = rvalid;
+        end
+    end
+    //assign next_awready = (awvalid == 1'b1 && state_engine == engine_before_start && awready == 1'b0 && flag_addr_or_tap == 1'b0);
+    //assign next_wready = (wvalid == 1'b1 && state_engine == engine_before_start && wready == 1'b0 && flag_addr_or_tap == 1'b1);
+    //assign next_rvalid = (arvalid == 1'b0 && rready == 1'b1 && rvalid == 1'b0 && flag_addr_or_rdata == 1'b1);
     assign next_arready = (arready == 1'b0 && arvalid == 1'b1 && flag_addr_or_rdata == 1'b0);
     
     always @(*) begin
@@ -384,9 +396,9 @@ module fir
     end
     
     always @(*) begin
-        if (awvalid) begin
+        if (awvalid && state_engine == engine_before_start) begin
             next_temporary_addr[7:0] = awaddr[7:0];
-        end else if (arvalid) begin
+        end else if (arvalid && state_engine == engine_before_start) begin
             next_temporary_addr[7:0] = araddr[7:0];
         end else begin
             next_temporary_addr = temporary_addr;
@@ -404,12 +416,6 @@ module fir
     
     // deal with ''tap_A''
     always @(*) begin
-    /*
-        if (state_engine == engine_initial) begin
-            tap_A = initial_counter * 12'd4;
-        end
-        else
-        */
         if (state_engine == engine_before_start) begin
             tap_A[6:0] = temporary_addr[6:0];
             tap_A[11:7] = 5'd0;
@@ -437,9 +443,7 @@ module fir
 
     // deal with ''tap_WE''
     always @(*) begin
-        if (state_engine == engine_initial) begin
-            tap_WE = 4'b1111;
-        end else if (state_engine == engine_before_start && wready == 1'b1 && temporary_addr[11:8] == 4'd0 && temporary_addr[7] == 1'b1) begin
+        if (state_engine == engine_before_start && wready == 1'b1 && temporary_addr[11:8] == 4'd0 && temporary_addr[7] == 1'b1) begin
             tap_WE = 4'b1111;        
         end else begin
             tap_WE = 4'b0000;
@@ -490,7 +494,9 @@ module fir
     end
     
     always @(*) begin
-        if (ss_tready == 1'b1 && ss_tvalid == 1'b1) begin
+        if (state_engine == engine_initial) begin
+            next_data_addr_counter = 1'b0;
+        end else if (ss_tready == 1'b1 && ss_tvalid == 1'b1) begin
             if (data_addr_counter == 5'd31) begin
                 next_data_addr_counter = 1'b0;
             end else begin
@@ -549,7 +555,9 @@ module fir
     end
     
     always @(*) begin
-        if (sm_tvalid && sm_tready) begin
+        if (state_engine == engine_initial) begin
+            next_data_ram_start_place_count = 5'd0;
+        end else if (sm_tvalid && sm_tready) begin
             if (data_ram_start_place_count == 5'd31) begin
                 next_data_ram_start_place_count = 5'd0;
             end else begin
@@ -583,7 +591,7 @@ module fir
     end
     
     always @(*) begin
-        if (state_engine != engine_processing && next_state_engine != engine_processing) begin
+        if ((state_engine != engine_processing && next_state_engine != engine_processing) || state_engine == engine_initial) begin
             next_data_cursor_count = data_ram_start_place_count;
         end else if (next_state_engine == engine_processing && state_engine != engine_processing) begin
             if (data_cursor_count == 5'd0) begin
@@ -621,6 +629,8 @@ module fir
     
     assign sm_tdata = y;
     
+
+    
     always @(*) begin
         if (state_engine != engine_processing) begin
             next_cycle_count = 6'd0;
@@ -637,7 +647,7 @@ module fir
                 sm_tvalid = 1'b0;
             end
         end else begin
-            if (cycle_count >= tap_num[5:0] + 5'd1) begin
+            if (cycle_count == tap_num[5:0] + 6'd2) begin
                 sm_tvalid = 1'b1;
             end else begin
                 sm_tvalid = 1'b0;
@@ -653,7 +663,7 @@ module fir
 
     assign m_tmp = h * x;       
     assign h_tmp = tap_Do;
-    assign x_tmp = data_Do;
+    //assign x_tmp = data_Do;
 
     always @(posedge axis_clk or negedge axis_rst_n) begin
         if (!axis_rst_n) begin
@@ -669,10 +679,22 @@ module fir
         end
     end
     
+    always @(*) begin
+        if (cycle_count <= tap_num[5:0] + 6'd1 && state_engine == engine_processing) begin
+            x_tmp = data_Do;
+        end else begin
+            x_tmp = 32'd0;
+        end
+    end
+    
     // deal with y_tmp
     always @(*) begin
         if (state_engine == engine_processing) begin
-            y_tmp = y + m;
+            if (sm_tvalid == 1'd1) begin
+                y_tmp = y;
+            end else begin
+                y_tmp = y + m;
+            end
         end else begin
             y_tmp = 0;
         end
