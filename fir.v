@@ -45,37 +45,42 @@ module fir
     
     
     output [31:0] data_x_length,
-    output [1:0] state_engine,
-    output [1:0] state_data_ram,
+    output [2:0] state_engine,
     output [31:0] done_times,
-    output flag_addr_rdata
-    
+    output [11:0] temporary_addr,
+    output [4:0] tap_cursor_count,
+    output [4:0] data_cursor_count
 );
 
 
 // Main FSM
 ///////////////////////////////////////////////////////////////////////////////////// deal with ap_ctrl
-    reg [1:0] state_engine;
-    reg [1:0] next_state_engine;
+    reg [2:0] state_engine;
+    reg [2:0] next_state_engine;
+    
+    reg flag_state_initial_to_before_start; // if it's 1, state to before start
+    reg next_flag_state_initial_to_before_start;
+    reg flag_addr_or_tap; // to judge now is waiting tap or addr, 0 is waiting addr, 1 is waiting tag
+    reg next_flag_addr_or_tap;
+    reg flag_addr_or_rdata;//0 is waiting data
+    reg next_flag_addr_or_rdata;
     
     reg start_cal, next_start_cal;
-    reg [2:0] ap_ctrl; // [pa_idle, ap_done, ap_start]
+    reg [2:0] ap_ctrl; // [ap_idle, ap_done, ap_start]
     reg [2:0] next_ap_ctrl;
     
-    reg [11:0] aw_ctrl_addr; // used in main FSM
-    reg [11:0] next_aw_ctrl_addr; // judged in tap RAM
     reg [11:0] ar_ctrl_addr; // used in main FSM
     reg [11:0] next_ar_ctrl_addr; // judged in data RAM
     
-
-    parameter engine_before_start = 2'd0;
-    parameter engine_idle = 2'd1;
-    parameter engine_processing = 2'd2;
-    parameter engine_done = 2'd3;
+    parameter engine_initial = 3'd0;
+    parameter engine_before_start = 3'd1;
+    parameter engine_waiting_data = 3'd2;
+    parameter engine_processing = 3'd3;
+    parameter engine_done = 3'd4;
 
     always @(posedge axis_clk or negedge axis_rst_n) begin
         if (!axis_rst_n) begin
-            state_engine <= engine_before_start; 
+            state_engine <= engine_initial; 
             ap_ctrl <= 3'b100;
         end else begin
             state_engine <= next_state_engine;
@@ -84,145 +89,118 @@ module fir
     end
     
     // FSM
-    always @* begin
+    always @(*) begin
         case (state_engine)
+            engine_initial: begin
+                if (initial_counter == 12'd32) begin
+                    next_state_engine = engine_before_start;
+                end else begin
+                    next_state_engine = state_engine;
+                end
+            end
             engine_before_start: begin
                 if (wdata == 32'd1 && awaddr == 12'd0 && awvalid == 1'b1) begin
-                    next_state_engine = engine_processing;
-                    next_ap_ctrl = 3'b001;
+                    next_state_engine = engine_waiting_data;
                 end else begin
-                    next_state_engine = engine_before_start;
-                    next_ap_ctrl = 3'b100;
+                    next_state_engine = state_engine;
+                end
+            end
+            engine_waiting_data: begin
+                if (sm_tlast == 1'b1) begin
+                    next_state_engine = engine_done;
+                end else if (ss_tready == 1'b1 && ss_tvalid == 1'b1) begin 
+                    next_state_engine = engine_processing;
+                end else begin
+                    next_state_engine = state_engine;
                 end
             end
             engine_processing: begin
-                if (sm_tlast) begin 
+                if (sm_tlast == 1'b1) begin
                     next_state_engine = engine_done;
-                    next_ap_ctrl = 3'b010;
+                end else if (sm_tvalid == 1'b1 && sm_tready == 1'b1) begin
+                    next_state_engine = engine_waiting_data;
                 end else begin
-                    next_state_engine = engine_processing;
-                    next_ap_ctrl = 3'b000;
+                    next_state_engine = state_engine;
                 end
             end
-            engine_done: begin
-                if (araddr == 0 && rdata == 32'h0000_0002 && rready && rvalid) begin
+            engine_done: begin/////////////////////////////////////////////////////////////////////////////////////
+                if (rvalid && rready) begin
                     next_state_engine = engine_before_start;
-                    next_ap_ctrl = 3'b100;
                 end else begin
-                    next_state_engine = engine_done;
-                    next_ap_ctrl = 3'b110;
+                    next_state_engine = state_engine;
                 end
             end
             default: begin
                 next_state_engine = engine_before_start;
-                next_ap_ctrl = 3'b100;
             end
         endcase
     end
-    
+
+/////////////////////////////////////////////////////////////////////////////
+//deal with ap_ctrl
+    always @(*) begin
+        case (state_engine)
+            engine_initial: begin
+                next_ap_ctrl = 3'b100;
+            end
+            engine_before_start: begin
+                if (wdata == 32'd1 && awaddr == 12'd0 && awvalid == 1'b1) begin
+                    next_ap_ctrl = 3'b101;
+                end else begin
+                    next_ap_ctrl = 3'b100;
+                end
+            end
+            engine_waiting_data: begin
+                if (sm_tlast == 1'b1) begin
+                    next_ap_ctrl = 3'b010;
+                end else if (ss_tready == 1'b1 && ss_tvalid == 1'b1) begin 
+                    next_ap_ctrl = 3'b000;
+                end else begin
+                    next_ap_ctrl = 3'b000;
+                end
+            end
+            engine_processing: begin
+                if (sm_tlast == 1'b1) begin
+                    next_ap_ctrl = 3'b010;
+                end else if (sm_tvalid == 1'b1 && sm_tready == 1'b1) begin
+                    next_ap_ctrl = 3'b000;
+                end else begin
+                    next_ap_ctrl = 3'b000;
+                end
+            end
+            engine_done: begin/////////////////////////////////////////////////////////////////////////////////////
+                if (rvalid && rready) begin
+                    next_ap_ctrl = 3'b100;
+                end else begin
+                    next_ap_ctrl = 3'b010;
+                end
+            end
+            default: begin
+                next_ap_ctrl = ap_ctrl;
+            end
+        endcase
+    end
+
 /////////////////////////////////////////////////////////////////////////////
 
-
-    // deal with data_x_length
-    reg [31:0] data_x_length;
-    wire [31:0] next_data_x_length;
-    wire[5:0] data_num;
-    reg [5:0] next_data_num;
+/////////////////////////////////////////////////////////////////////////////
+//when initial, put 0 to data_ram, and here is used to calculate data_A
+    reg [11:0] initial_counter;
+    wire [11:0] next_initial_counter;
     
     always @(posedge axis_clk, negedge axis_rst_n) begin
         if (!axis_rst_n) begin
-            data_x_length <= 32'd0;
+            initial_counter <= 12'd0;
         end else begin
-            data_x_length <= next_data_x_length;
+            initial_counter <= next_initial_counter;
         end
     end
     
-    /*
-    always @(*) begin
-        if (state_engine == engine_before_start) begin
-            if (araddr < 12'h14 && araddr >= 12'h10) begin
-                next_data_x_length = rdata;
-            end else if ((awaddr < 12'h14 && awaddr >= 12'h10)) begin
-                next_data_x_length = wdata;
-            end else begin
-                next_data_x_length = data_x_length;
-            end
-        end else if (state_engine == engine_processing) begin
-            if (data_x_length > 32'd32) begin
-                next_data_x_length = data_x_length - 32'd32;
-            end else begin
-                next_data_x_length = 32'd0;
-            end
-        end else begin
-            next_data_x_length = data_x_length;   
-        end
-    end
-    */
-    assign next_data_x_length = 32'd400;//////////////////////////////////////////////////////////////////////// problem
-    
-    
-    //deal with data_num
-    
-    assign data_num = 6'd32;//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    
-    
-    // deal with tap_num
-    reg [31:0] tap_num;
-    reg [31:0] next_tap_num;
-    
-    always @(posedge axis_clk, negedge axis_rst_n) begin
-        if (!axis_rst_n) begin
-            tap_num <= 32'd0;
-        end else begin
-            tap_num <= next_tap_num;
-        end
-    end
-    
-    always @(*) begin
-        if (state_engine == engine_before_start) begin
-            if (araddr <= 12'h14 && araddr < 12'h18) begin
-                next_tap_num = rdata;
-            end else if ((awaddr < 12'h18 && awaddr >= 12'h14)) begin
-                next_tap_num = wdata;
-            end else begin
-                next_tap_num = tap_num;
-            end
-        end else begin
-            next_tap_num = tap_num;   
-        end
-    end
+    assign next_initial_counter = (state_engine == engine_initial && initial_counter != 12'd32) ? initial_counter + 12'd1 : initial_counter;
+/////////////////////////////////////////////////////////////////////////////
 
-
-// tap RAM
-/////////////////////////////////////////////////////////////////////////////////////// deal with tap_RAM axi-lite
-    reg [4:0] tap_addr_counter;
-    reg [4:0] next_tap_addr_counter;
-    reg next_awready;
-    reg next_wready;
-    
-    
-    // control write process
-    reg flag_addr_or_tap; // to judge now is waiting tap or addr, 0 is waiting addr, 1 is waiting tag
-    reg next_flag_addr_or_tap;
-    reg flag_tap_finish;
-    
-    // deal with flag_tap_finish to know whether tap is all written 
-    always @(*) begin
-        if (awaddr[6:2] == tap_num) begin
-            flag_tap_finish = 1'b1;
-        end else begin
-            flag_tap_finish = 1'b0;
-        end
-    end
-    
-    always @(posedge axis_clk, negedge axis_rst_n) begin
-        if (!axis_rst_n) begin
-            flag_addr_or_tap <= 1'b0;
-        end else begin
-            flag_addr_or_tap <= next_flag_addr_or_tap;
-        end
-    end
-    
+/////////////////////////////////////////////////////////////////////////////
+// used to judge it's now to receive addr or tap. addr is 0, tap is 1, it can be used to hold the state of receive tap or addr
     always @(*) begin
         if (awready == 1'b1 && awvalid == 1'b1) begin
             next_flag_addr_or_tap = 1'b1;
@@ -233,22 +211,134 @@ module fir
         end
     end
     
-    // deal with aw_ctrl_addr used in main module
+    // deal with flag_addr_or_rdata
     always @(*) begin
-        if (awvalid == 1'b1 && awready == 1'b0) begin
-            next_aw_ctrl_addr = awaddr;
+        if (arvalid == 1'b1 && rready == 1'b1 && flag_addr_or_rdata == 1'b0) begin
+            next_flag_addr_or_rdata = 1'b1;
+        end else if(arvalid == 1'b0 && rready == 1'b1&& flag_addr_or_rdata == 1'b1) begin
+            next_flag_addr_or_rdata = 1'b0;
         end else begin
-            next_aw_ctrl_addr = aw_ctrl_addr;
+            next_flag_addr_or_rdata = flag_addr_or_rdata;
+        end
+    end
+/////////////////////////////////////////////////////////////////////////////
+
+    // deal with data_x_length
+    reg [31:0] data_x_length;
+    wire [31:0] next_data_x_length;
+    reg flag_data_length_receive; // if it's 1 => data_x_length can be received => to hold 1 if there is space between awvalid and wvalid
+    reg next_flag_data_length_receive;
+    wire[5:0] data_num;
+    reg [5:0] next_data_num;
+    
+    always @(posedge axis_clk, negedge axis_rst_n) begin
+        if (!axis_rst_n) begin
+            data_x_length <= 32'd0;
+            flag_data_length_receive <= 1'b0;
+        end else begin
+            data_x_length <= next_data_x_length;
+            flag_data_length_receive <= next_flag_data_length_receive;
+        end
+    end
+    
+    always @(*) begin
+        if (awaddr == 12'h10 && awvalid == 1'b1 && awready == 1'b1 && flag_addr_or_tap == 1'b0 && state_engine == engine_before_start) begin
+            next_flag_data_length_receive = 1'b1;
+        end else if (wvalid && wready && flag_addr_or_tap == 1'b1) begin
+            next_flag_data_length_receive = 1'b0;
+        end else begin
+            next_flag_data_length_receive = flag_data_length_receive;
+        end
+    end
+    
+    assign next_data_x_length = (wvalid && wready && flag_data_length_receive && state_engine == engine_before_start) ? wdata : data_x_length;
+    
+    
+    //deal with data_num
+    assign data_num = 6'd32;//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    
+    
+    // deal with tap_num
+    reg [31:0] tap_num;
+    wire [31:0] next_tap_num;
+    reg flag_tap_num_receive; // if it's 1 => tap_num can be received => to hold 1 if there is space between awvalid and wvalid
+    reg next_flag_tap_num_receive;
+    
+    always @(posedge axis_clk, negedge axis_rst_n) begin
+        if (!axis_rst_n) begin
+            tap_num <= 32'd0;
+            flag_tap_num_receive = 1'b0;
+        end else begin
+            tap_num <= next_tap_num;
+            flag_tap_num_receive = next_flag_tap_num_receive;
+        end
+    end
+    
+    always @(*) begin
+        if (awaddr == 12'h14 && awvalid == 1'b1 && awready == 1'b1 && flag_addr_or_tap == 1'b0 && state_engine == engine_before_start) begin
+            next_flag_tap_num_receive = 1'b1;
+        end else if (wvalid && wready && flag_addr_or_tap == 1'b1) begin
+            next_flag_tap_num_receive = 1'b0;
+        end else begin
+            next_flag_tap_num_receive = flag_tap_num_receive;
         end
     end
 
+    assign next_tap_num = (wvalid && wready && flag_tap_num_receive && state_engine == engine_before_start) ? wdata : tap_num;
     
-    // deal with addr counter-sequential
+
+// tap RAM
+/////////////////////////////////////////////////////////////////////////////////////// deal with tap_RAM axi-lite
+    reg [4:0] tap_addr_counter;
+    reg [4:0] next_tap_addr_counter;
+    wire next_awready;
+    wire next_wready;
+    wire next_arready;
+    wire next_rvalid;
+    wire [31:0] next_rdata;
+    reg [11:0] temporary_addr;
+    reg [11:0] next_temporary_addr;
+    
+    reg [11:0] next_tap_A;
+    
+    reg flag_one_cycle; // I want to delay one cycle when receive tap_ram or read tap_ram;
+    wire next_flag_one_cycle;
+    
     always @(posedge axis_clk, negedge axis_rst_n) begin
         if (!axis_rst_n) begin
+            flag_addr_or_tap <= 1'b0;
+            flag_addr_or_rdata <= 1'b0;
+            
             tap_addr_counter <= 5'd0;
+            
+            awready <= 1'b0;
+            wready <= 1'b0;
+            arready <= 1'b0;
+            rvalid <= 1'b0;
+            
+            
+            //rdata <= 32'd0;
+            temporary_addr <= 12'd0;
+            flag_one_cycle <= 1'b0;
+            //tap_A <= 12'd0;
+            //read_tap_addr <= 5'd0;
         end else begin
+            flag_addr_or_tap <= next_flag_addr_or_tap;
+            flag_addr_or_rdata <= next_flag_addr_or_rdata;
+            
             tap_addr_counter <= next_tap_addr_counter; 
+            
+            awready <= next_awready;
+            wready <= next_wready;
+            arready <= next_arready;
+            rvalid <= next_rvalid;
+            
+            
+            //rdata <= next_rdata;
+            temporary_addr <= next_temporary_addr;
+            flag_one_cycle <= next_flag_one_cycle;
+            //tap_A <= next_tap_A;
+            //read_tap_addr <= next_read_tap_addr;
         end
     end 
     
@@ -265,64 +355,54 @@ module fir
             next_tap_addr_counter = tap_addr_counter;
         end
     end
-    
+      
 
-    // deal with ''awready''
-    always @(posedge axis_clk, negedge axis_rst_n) begin
-        if (!axis_rst_n) begin
-            awready <= 1'b0;
-        end else begin
-            awready <= next_awready;
-        end
-    end 
+    // deal with ''awready'', ''wready'' , ''arready'', ''rvalid'' 
+    assign next_flag_one_cycle = awvalid || arvalid;
+    assign next_awready = (awvalid == 1'b1 && state_engine == engine_before_start && awready == 1'b0 && flag_addr_or_tap == 1'b0);
+    assign next_wready = (wvalid == 1'b1 && state_engine == engine_before_start && wready == 1'b0 && flag_addr_or_tap == 1'b1);
+    assign next_rvalid = (arvalid == 1'b0 && rready == 1'b1 && rvalid == 1'b0 && flag_addr_or_rdata == 1'b1);
+    assign next_arready = (arready == 1'b0 && arvalid == 1'b1 && flag_addr_or_rdata == 1'b0);
     
     always @(*) begin
-        if (awvalid == 1'b1 && state_engine == engine_before_start && awready == 1'b0 && flag_addr_or_tap == 1'b0) begin
-            next_awready = 1'b1;
+        if (temporary_addr == 12'h00) begin
+            rdata = ap_ctrl;
         end else begin
-            next_awready = 1'b0;
+            rdata = tap_Do;
         end
     end
     
-    
-    // deal with ''wready''
-    always @(posedge axis_clk, negedge axis_rst_n) begin
-        if (!axis_rst_n) begin
-            wready <= 1'b0;
-        end else begin
-            wready <= next_wready;
-        end
-    end 
-    
     always @(*) begin
-        if (wvalid == 1'b1 && state_engine == engine_before_start && wready == 1'b0 && flag_addr_or_tap == 1'b1) begin
-            next_wready = 1'b1;
+        if (awvalid) begin
+            next_temporary_addr[7:0] = awaddr[7:0];
+        end else if (arvalid) begin
+            next_temporary_addr[7:0] = araddr[7:0];
         end else begin
-            next_wready = 1'b0;
+            next_temporary_addr = temporary_addr;
         end
     end
-    
     
     // deal with ''tap_Di''
     always @(*) begin
-        tap_Di =  wdata;
+        if (state_engine == engine_initial) begin
+            tap_Di =  32'd0;
+        end else begin
+            tap_Di =  wdata;
+        end
     end
-    
     
     // deal with ''tap_A''
     always @(*) begin
-        if (state_engine == engine_before_start) begin
-            if (tap_WE == 4'd15) begin
-                tap_A = awaddr[6:0];
-            end else begin
-                tap_A = araddr[6:0];
-            end 
+        if (state_engine == engine_initial) begin
+            tap_A = initial_counter * 12'd4;
+        end
+        else if (state_engine == engine_before_start) begin
+            tap_A[6:0] = temporary_addr[6:0];
+            tap_A[11:7] = 5'd0;
+        end else if (state_engine == engine_processing) begin
+            tap_A = tap_do_pointer * 12'd4;
         end else begin
-            if (state_data_ram != waiting_cal) begin
-                tap_A = araddr[6:0];
-            end else begin
-                tap_A = tap_do_pointer * 12'd4;
-            end
+            tap_A = araddr[6:0];
         end
     end
     
@@ -330,7 +410,7 @@ module fir
     // deal with ''tap_EN''
     always @(*) begin
         if (state_engine == engine_before_start) begin
-            if ((awaddr[11:8] == 4'd0 && awaddr[7] == 1'b1) || (araddr[11:8] == 0 && araddr[7] == 0)) begin
+            if (temporary_addr[11:8] == 4'd0 && temporary_addr[7] == 1'b1) begin
                 tap_EN = 1'b1;
             end else begin
                 tap_EN = 1'b0;
@@ -343,95 +423,12 @@ module fir
 
     // deal with ''tap_WE''
     always @(*) begin
-        if (wvalid == 1'b1 && awvalid == 1'b1 && awaddr[11:8] == 4'd0 && awaddr[7] == 1'b1) begin
+        if (state_engine == engine_initial) begin
+            tap_WE = 4'b1111;
+        end else if (state_engine == engine_before_start && wready == 1'b1 && temporary_addr[11:8] == 4'd0 && temporary_addr[7] == 1'b1) begin
             tap_WE = 4'b1111;        
         end else begin
             tap_WE = 4'b0000;
-        end
-    end
-    
-    ///////////////////
-    ///////////////////
-    ///////////////////deal with axi-lite reading part
-    reg [4:0] read_tap_addr;
-    reg [4:0] next_read_tap_addr;
-    reg flag_addr_rdata;//0 is waiting data
-    reg next_flag_addr_rdata;
-    
-    //deal with ''arready'', read_tap_addr;
-    reg next_arready;
-    always @(posedge axis_clk, negedge axis_rst_n) begin
-        if (!axis_rst_n) begin
-            arready <= 1'b0;
-            read_tap_addr <= 5'd0;
-        end else begin
-            arready <= next_arready;
-            read_tap_addr <= next_read_tap_addr;
-        end
-    end
-    
-    always @(*) begin
-         if (arready == 1'b0 && arvalid == 1'b1 && flag_addr_rdata == 1'b0 && (state_engine == engine_before_start || state_engine == engine_done)) begin
-            if (araddr >= 12'h80 && araddr < 12'hff) begin
-                next_arready = 1'b1;
-                next_read_tap_addr = araddr[6:2];
-            end else begin
-                next_arready = 1'b0;
-                next_read_tap_addr = read_tap_addr;
-            end
-         end else begin
-            next_arready = 1'b0;
-            next_read_tap_addr = read_tap_addr;
-         end
-    end
-    
-    /*
-    //deal with next_ar_ctrl_addr used in main FSM
-    always @(*) begin
-        if (arready == 1'b0 && arvalid == 1'b1) begin
-            next_ar_ctrl_addr = araddr;
-        end else begin
-            next_ar_ctrl_addr = ar_ctrl_addr;
-        end
-    end
-    */
-    
-    reg next_rvalid;
-
-    always @(posedge axis_clk, negedge axis_rst_n) begin
-        if (!axis_rst_n) begin
-            rvalid <= 1'b0;
-            flag_addr_rdata <= 1'b0;
-        end else begin
-            rvalid <= next_rvalid;
-            flag_addr_rdata <= next_flag_addr_rdata;
-        end
-    end
-    
-    always @(*) begin
-        if (rready == 1'b1 && rvalid == 1'b0 && flag_addr_rdata == 1'b1 && (state_engine == engine_before_start || state_engine == engine_done)) begin
-            next_rvalid = 1'b1;
-        end else begin
-            next_rvalid = 1'b0;
-        end
-    end
-    
-    always @(*) begin
-        if (rready == 1'b1) begin
-            rdata = tap_Do;
-        end else begin
-            rdata = 32'd0;
-        end
-    end
-    
-    // deal with flag_addr_rdata
-    always @(*) begin
-        if (arvalid == 1'b1 && rready == 1'b1 && flag_addr_rdata == 1'b0 && (state_engine == engine_before_start || state_engine == engine_done)) begin
-            next_flag_addr_rdata = 1'b1;
-        end else if(arvalid == 1'b0 && rready == 1'b1&& flag_addr_rdata == 1'b1 && (state_engine == engine_before_start || state_engine == engine_done)) begin
-            next_flag_addr_rdata = 1'b0;
-        end else begin
-            next_flag_addr_rdata = flag_addr_rdata;
         end
     end
     
@@ -440,7 +437,7 @@ module fir
 
 // data RAM
 //////////////////////////////////////////////////////////////////////////////////////////// deal with data_RAM axi-stream
-    reg next_ss_tready;
+    wire next_ss_tready;
     
     reg [4:0] data_addr_counter;
     reg [4:0] next_data_addr_counter;
@@ -448,96 +445,42 @@ module fir
     
     reg [31:0] data_addr_used_table;
     reg [31:0] next_data_addr_used_table;
-
-    reg [1:0] state_data_ram;
-    reg [1:0] next_state_data_ram;
-    
-    parameter waiting_ap_start = 2'd0;
-    parameter waiting_data = 2'd1;
-    parameter waiting_cal = 2'd2;
-    parameter rest = 2'd3;
-    
-    // data_ram_FSM
-    always @(posedge axis_clk or negedge axis_rst_n) begin
-        if (!axis_rst_n) begin
-            state_data_ram <= waiting_ap_start;
-        end else begin
-            state_data_ram <= next_state_data_ram;    
-        end
-    end    
-    
-    always @(*) begin
-        case(state_data_ram)
-            waiting_ap_start: begin
-                if (state_engine == engine_processing) begin
-                    next_state_data_ram = waiting_data;
-                end else begin
-                    next_state_data_ram = state_data_ram;
-                end
-            end
-            waiting_data: begin
-                if (ss_tready == 1'b1 && ss_tvalid == 1'b1) begin
-                    next_state_data_ram = waiting_cal;
-                end else begin
-                    next_state_data_ram = waiting_data;
-                end
-            end
-            waiting_cal: begin
-                if (sm_tvalid == 1'b1 && sm_tready == 1'b1) begin
-                    next_state_data_ram = waiting_data;
-                end else begin
-                    next_state_data_ram = waiting_cal;
-                end 
-            end
-            default: begin
-                next_state_data_ram = state_data_ram;
-            end             
-        endcase
-    end
     
     //////////////////////// waiting data
     // deal with ss_tready
+    // deal with data_A, data_addr_counter;
     always @(posedge axis_clk or negedge axis_rst_n) begin
         if (!axis_rst_n) begin
             ss_tready <= 1'b0;
             data_addr_used_table <= 32'd0;
+            data_addr_counter <= 5'd0;
         end else begin
             ss_tready <= next_ss_tready;
             data_addr_used_table <= next_data_addr_used_table;
-        end
-    end
-
-    always @(*) begin
-        if (ss_tvalid == 1'b1 && ss_tready == 1'b0 && state_data_ram == waiting_data) begin
-            next_ss_tready = 1'b1;
-        end else begin
-            next_ss_tready = 1'b0;
+            data_addr_counter <= next_data_addr_counter;
         end
     end
     
+    assign next_ss_tready = (ss_tvalid == 1'b1 && ss_tready == 1'b0 && state_engine == engine_waiting_data);
+    
     // deal with data_EN and data_WE and data_Di
     always @(*) begin
-        if (state_engine == engine_processing) begin
+        if (state_engine == engine_initial || state_engine == engine_processing || state_engine == engine_waiting_data) begin
             data_EN = 1'b1;
         end else begin
             data_EN = ss_tvalid;
         end
         
-        if (ss_tready == 1'b0) begin
-            data_WE = 4'b0000;
-        end else begin
+        if (ss_tready == 1'b1 || state_engine == engine_initial) begin
             data_WE = 4'b1111;
+        end else begin
+            data_WE = 4'b0000;
         end
         
-        data_Di = ss_tdata;
-    end
-
-    // deal with data_A, data_addr_counter;
-    always @(posedge axis_clk, negedge axis_rst_n) begin
-        if (!axis_rst_n) begin
-            data_addr_counter <= 5'd0;
-        end else begin
-            data_addr_counter <= next_data_addr_counter;
+        if (state_engine == engine_initial) begin
+            data_Di = 32'd0;
+        end  else begin
+            data_Di = ss_tdata;
         end
     end
     
@@ -555,128 +498,174 @@ module fir
     
     // data A
     always @(*) begin
-        if (state_data_ram == waiting_ap_start) begin
-            data_A = 12'd0;
-        end else if (state_data_ram == waiting_data) begin
+        if (state_engine == engine_initial) begin
+            data_A = 12'h4 * initial_counter;
+        end else if (state_engine == engine_processing) begin
+            data_A = 12'h4 * data_do_pointer;
+        end else if (state_engine == engine_waiting_data) begin
             data_A = 12'h4 * data_addr_counter; 
         end else begin
-            data_A = 12'h4 * data_do_pointer;
+            data_A = 5'd0;
         end     
     end    
 
 
-/////////////////////////////////////////////////////////// control data_do and tap_do
+/////////////////////////////////////////////////////////// control data_do and tap_do and sm value
     wire [7:0] output_num;
     
     wire [4:0] data_do_pointer; // to count which data_A should be read
     wire [4:0] tap_do_pointer; // to count which tap_A should be read
     
-    reg [4:0] counter_reset_time; // the times counter has been reset, to know how many cycles core porecess should calculate
-    reg [4:0] next_counter_reset_time;
-    
-    reg [5:0] shift_reg_data [31:0];
-    reg [5:0] shift_in_data; // data that will maybe be shifted in
-    reg [5:0] next_shift_in_data;
-    wire [5:0] shift_size;
-    integer i;
-     
-    wire flag_temporary_fininsh_cal;
-    reg [5:0] counter_every_thirty_five_cycles;
-    reg [5:0] next_counter_every_thirty_five_cycles;
-     
-    reg [4:0] shift_count; // when count to shift_size => return to 0    
-    reg [4:0] next_shift_count;
-    
     reg [31:0] done_times; //how many times the convolution has been done
-    wire [31:0] next_done_times;
+    reg [31:0] next_done_times;
     
-    assign output_num = tap_num + data_num - 8'd2;
-    assign shift_size = (tap_num < data_num) ? tap_num : data_num;
+    reg [4:0] data_ram_start_place_count; // to record the start place of data_ram   
+    reg [4:0] next_data_ram_start_place_count;
     
-    // deal with shift register
+    reg [4:0] tap_cursor_count; // to record the current addr to send to tap_RAM 
+    reg [4:0] next_tap_cursor_count;
     
-    always @(posedge axis_clk, negedge axis_rst_n) begin
-        if (next_state_data_ram == waiting_cal && state_data_ram == waiting_data) begin ////wrong
-            for (i = 31; i > 0; i = i - 1) begin
-                shift_reg_data[i] <= shift_reg_data[i-1];
-            end
-            shift_reg_data[0] <= data_addr_counter;
-        end else begin
-            for (i = 0; i < 11; i = i + 1) begin
-                shift_reg_data[i] <= shift_reg_data[i];
-            end
-        end
-    end
+    reg [4:0] data_cursor_count; // to record the current addr to send ap_ctrl data_RAM
+    reg [4:0] next_data_cursor_count;
     
+    reg [31:0] cycle_count; // need to record how many cycle in state=engine_processing
+    reg [31:0] next_cycle_count;
     
-    // deal with shift_count, done_times
     always @(posedge axis_clk, negedge axis_rst_n) begin
         if (!axis_rst_n) begin
-            shift_count <= 5'd0;
+            data_cursor_count <= 5'd0;
+            tap_cursor_count <= 5'd0;
             done_times <= 32'd0;
-            counter_every_thirty_five_cycles <= 6'd0;
+            cycle_count <= 5'd0;
+            data_ram_start_place_count <= 5'd0;
+            //counter_every_thirty_five_cycles <= 6'd0;
         end else begin
-            shift_count <= next_shift_count;
+            data_cursor_count <= next_data_cursor_count;
+            tap_cursor_count <= next_tap_cursor_count;
             done_times <= next_done_times;
-            counter_every_thirty_five_cycles <= next_counter_every_thirty_five_cycles;
-        end
-    end
-    assign next_done_times = (shift_count == 5'd30 && next_shift_count == 5'd31) ? done_times + 32'd1 : done_times;
-    
-    
-    //deal with next_shift_count
-    always @(*) begin 
-        if (state_data_ram == waiting_ap_start) begin
-            next_shift_count = 5'd0;
-        end else if (state_data_ram == waiting_data && next_state_data_ram == waiting_data) begin
-            next_shift_count = 5'd0;
-        end else if (next_state_data_ram == waiting_cal && state_data_ram == waiting_data) begin
-            next_shift_count = 5'd1;
-        end else if (state_data_ram == waiting_cal) begin
-            if (shift_count == 5'd31) begin
-                next_shift_count = 5'd31;
-            end else begin
-                next_shift_count = shift_count + 5'd1;
-            end
-        end else begin
-            next_shift_count = shift_count;
+            cycle_count <= next_cycle_count;
+            data_ram_start_place_count <= next_data_ram_start_place_count;
+            //counter_every_thirty_five_cycles <= next_counter_every_thirty_five_cycles;
         end
     end
     
     always @(*) begin
-        
-    end
-        
-    // assign data_do_pointer value
-    assign data_do_pointer = shift_reg_data[shift_count];
-    
-    //assign tap_do_pointer = shift_reg_data[shift_count];
-    assign tap_do_pointer = shift_count;
-    
-    
-    // deal with counter 35 cycles
-    always @(*) begin
-        if (state_data_ram == waiting_ap_start || state_data_ram == waiting_data) begin
-            next_counter_every_thirty_five_cycles = 6'd0;
+        if (state_engine == engine_before_start) begin
+            next_done_times = 32'd0;
         end else begin
-            if (counter_every_thirty_five_cycles == 6'd35) begin
-                next_counter_every_thirty_five_cycles = 6'd0;
+            if (sm_tvalid && sm_tready) begin
+                next_done_times = done_times + 32'd1;
             end else begin
-                next_counter_every_thirty_five_cycles = counter_every_thirty_five_cycles + 6'd1;
+                next_done_times = done_times;
             end
         end
     end
     
-    assign flag_temporary_fininsh_cal = (counter_every_thirty_five_cycles == 6'd35) ? 1 : 0;
+    always @(*) begin
+        if (sm_tvalid && sm_tready) begin
+            if (data_ram_start_place_count == 5'd31) begin
+                next_data_ram_start_place_count = 5'd0;
+            end else begin
+                next_data_ram_start_place_count = data_ram_start_place_count + 5'd1;
+            end
+        end else begin
+            next_data_ram_start_place_count = data_ram_start_place_count;
+        end
+    end
+    
+    always @(*) begin
+        if (state_engine != engine_processing && next_state_engine != engine_processing) begin
+            next_tap_cursor_count = 5'd0;
+        end else if (next_state_engine == engine_processing && state_engine != engine_processing) begin
+            next_tap_cursor_count = 5'd1;
+        end else begin
+            if (tap_num == 32'd32) begin
+                if (tap_cursor_count == 5'd31) begin
+                    next_tap_cursor_count = tap_cursor_count;
+                end else begin
+                    next_tap_cursor_count = tap_cursor_count + 5'd1;
+                end
+            end else begin
+                if (tap_cursor_count == tap_num[4:0] - 5'd1) begin
+                    next_tap_cursor_count = tap_cursor_count;
+                end else begin
+                    next_tap_cursor_count = tap_cursor_count + 5'd1;
+                end
+            end
+        end
+    end
+    
+    always @(*) begin
+        if (state_engine != engine_processing && next_state_engine != engine_processing) begin
+            next_data_cursor_count = data_ram_start_place_count;
+        end else if (next_state_engine == engine_processing && state_engine != engine_processing) begin
+            if (data_cursor_count == 5'd0) begin
+                next_data_cursor_count = 5'd31;
+            end else begin
+                next_data_cursor_count = data_cursor_count - 5'd1;
+            end
+        end else begin
+            if (tap_num == 32'd32) begin
+                if (tap_cursor_count == 5'd31) begin
+                    next_data_cursor_count = data_cursor_count;
+                end else begin
+                    if (data_cursor_count == 5'd0) begin
+                        next_data_cursor_count = 5'd31;
+                    end else begin
+                        next_data_cursor_count = data_cursor_count - 5'd1;
+                    end
+                end
+            end else begin
+                if (tap_cursor_count == tap_num[4:0] - 5'd1) begin
+                    next_data_cursor_count = data_cursor_count;
+                end else begin
+                    if (data_cursor_count == 5'd0) begin
+                        next_data_cursor_count = 5'd31;
+                    end else begin
+                        next_data_cursor_count = data_cursor_count - 5'd1;
+                    end
+                end
+            end
+        end
+    end
+    
+    assign data_do_pointer = data_cursor_count; 
+    assign tap_do_pointer = tap_cursor_count;
+    
+    assign sm_tdata = y;
+    
+    always @(*) begin
+        if (state_engine != engine_processing) begin
+            next_cycle_count = 6'd0;
+        end else begin
+            next_cycle_count = cycle_count + 6'd1;
+        end
+    end
+    
+    always @(*) begin
+        if (tap_num == 32'd32) begin
+            if (cycle_count >= 6'd31) begin
+                sm_tvalid = 1'b1;
+            end else begin
+                sm_tvalid = 1'b0;
+            end
+        end else begin
+            if (cycle_count >= tap_num[5:0] + 5'd1) begin
+                sm_tvalid = 1'b1;
+            end else begin
+                sm_tvalid = 1'b0;
+            end
+        end
+    end
+    
+    
 /////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////// core caculation
     wire [(pDATA_WIDTH-1):0] m_tmp;
-    reg [(pDATA_WIDTH-1):0] h_tmp;
-    reg [(pDATA_WIDTH-1):0] x_tmp;
+    wire [(pDATA_WIDTH-1):0] h_tmp;
+    wire [(pDATA_WIDTH-1):0] x_tmp;
     reg [(pDATA_WIDTH-1):0] y_tmp;
-
-    reg [(pDATA_WIDTH-1):0] pre_x_tmp;
 
     reg [(pDATA_WIDTH-1):0] m;
     reg [(pDATA_WIDTH-1):0] y;
@@ -684,7 +673,8 @@ module fir
     reg [(pDATA_WIDTH-1):0] x;
 
     assign m_tmp = h * x;       
-    //assign h_tmp = tap_Do;
+    assign h_tmp = tap_Do;
+    assign x_tmp = data_Do;
 
     always @(posedge axis_clk or negedge axis_rst_n) begin
         if (!axis_rst_n) begin
@@ -700,41 +690,15 @@ module fir
         end
     end
     
-    
-    // deal with x_tmp // wrong
-    always @(*) begin
-        //if (shift_count <= counter_reset_time + 1'b1) begin
-        if ((data_Do[0] == 1'b1 || data_Do[0] == 1'b0)) begin
-            x_tmp = data_Do;
-        end  else begin
-            x_tmp = 32'd0;
-        end
-    end
-    
     // deal with y_tmp
     always @(*) begin
-        if (state_data_ram == waiting_cal) begin
+        if (state_engine == engine_processing) begin
             y_tmp = y + m;
         end else begin
             y_tmp = 0;
         end
     end
-    
-    // wrong
-    always @(*) begin ////////////////////////////////////////////////////////////////// wrong
-        if (tap_Do[0] == 1'b1 || tap_Do[0] == 1'b0) begin
-            h_tmp = tap_Do;
-        end else begin
-            h_tmp = 32'd0;
-        end
-    end
-    
-    // use sm_valid to transport data;
-    always @(*) begin
-        sm_tvalid = flag_temporary_fininsh_cal;
-    end
-    
-    assign sm_tdata = y;
+
     
 /////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////
