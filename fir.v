@@ -41,15 +41,7 @@ module fir
     input   wire [(pDATA_WIDTH-1):0] data_Do,
 
     input   wire                     axis_clk,
-    input   wire                     axis_rst_n,
-    
-    
-    output [31:0] data_x_length,
-    output [2:0] state_engine,
-    output [31:0] done_times,
-    output [11:0] temporary_addr,
-    output [4:0] tap_cursor_count,
-    output [4:0] data_cursor_count
+    input   wire                     axis_rst_n
 );
 
 
