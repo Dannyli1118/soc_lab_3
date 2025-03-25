@@ -1,0 +1,50 @@
+ 
+****************************************
+check_design summary:
+Version:     R-2020.09-SP5
+Date:        Tue Mar 25 15:07:24 2025
+****************************************
+
+                   Name                                            Total
+--------------------------------------------------------------------------------
+Inputs/Outputs                                                     20
+    Unconnected ports (LINT-28)                                     1
+    Shorted outputs (LINT-31)                                      12
+    Constant outputs (LINT-52)                                      7
+
+Cells                                                              11
+    Cells do not drive (LINT-1)                                    11
+--------------------------------------------------------------------------------
+
+Warning: In design 'fir', cell 'B_57' does not drive any nets. (LINT-1)
+Warning: In design 'fir', cell 'C2830' does not drive any nets. (LINT-1)
+Warning: In design 'fir', cell 'C2849' does not drive any nets. (LINT-1)
+Warning: In design 'fir', cell 'C2858' does not drive any nets. (LINT-1)
+Warning: In design 'fir', cell 'C2874' does not drive any nets. (LINT-1)
+Warning: In design 'fir', cell 'B_66' does not drive any nets. (LINT-1)
+Warning: In design 'fir', cell 'C2900' does not drive any nets. (LINT-1)
+Warning: In design 'fir', cell 'C2906' does not drive any nets. (LINT-1)
+Warning: In design 'fir', cell 'B_69' does not drive any nets. (LINT-1)
+Warning: In design 'fir', cell 'B_70' does not drive any nets. (LINT-1)
+Warning: In design 'fir', cell 'C2952' does not drive any nets. (LINT-1)
+Warning: In design 'fir', port 'ss_tlast' is not connected to any nets. (LINT-28)
+Warning: In design 'fir', output port 'tap_WE[3]' is connected directly to output port 'tap_WE[0]'. (LINT-31)
+Warning: In design 'fir', output port 'tap_WE[3]' is connected directly to output port 'tap_WE[1]'. (LINT-31)
+Warning: In design 'fir', output port 'tap_WE[3]' is connected directly to output port 'tap_WE[2]'. (LINT-31)
+Warning: In design 'fir', output port 'tap_A[11]' is connected directly to output port 'data_A[0]'. (LINT-31)
+Warning: In design 'fir', output port 'tap_A[11]' is connected directly to output port 'data_A[1]'. (LINT-31)
+Warning: In design 'fir', output port 'tap_A[11]' is connected directly to output port 'tap_A[7]'. (LINT-31)
+Warning: In design 'fir', output port 'tap_A[11]' is connected directly to output port 'tap_A[8]'. (LINT-31)
+Warning: In design 'fir', output port 'tap_A[11]' is connected directly to output port 'tap_A[9]'. (LINT-31)
+Warning: In design 'fir', output port 'tap_A[11]' is connected directly to output port 'tap_A[10]'. (LINT-31)
+Warning: In design 'fir', output port 'data_WE[3]' is connected directly to output port 'data_WE[0]'. (LINT-31)
+Warning: In design 'fir', output port 'data_WE[3]' is connected directly to output port 'data_WE[1]'. (LINT-31)
+Warning: In design 'fir', output port 'data_WE[3]' is connected directly to output port 'data_WE[2]'. (LINT-31)
+Warning: In design 'fir', output port 'tap_A[11]' is connected directly to 'logic 0'. (LINT-52)
+Warning: In design 'fir', output port 'tap_A[10]' is connected directly to 'logic 0'. (LINT-52)
+Warning: In design 'fir', output port 'tap_A[9]' is connected directly to 'logic 0'. (LINT-52)
+Warning: In design 'fir', output port 'tap_A[8]' is connected directly to 'logic 0'. (LINT-52)
+Warning: In design 'fir', output port 'tap_A[7]' is connected directly to 'logic 0'. (LINT-52)
+Warning: In design 'fir', output port 'data_A[1]' is connected directly to 'logic 0'. (LINT-52)
+Warning: In design 'fir', output port 'data_A[0]' is connected directly to 'logic 0'. (LINT-52)
+1
